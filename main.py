@@ -179,11 +179,17 @@ class KenLMModel:
 
         return math.exp(-sum(log_probabilities) / len(log_probabilities))
 
-    def save(self, filename):
+    # Quantization saves ~15% space, seems less worthwhile for already small bin files
+    def save(self, filename, quantized=False):
+        # Header: node count, pointer count.
+        # Same values for now, but keeping separate in case of later compression/decoupling
+        HEADER_STRUCT = struct.Struct("<ii")
         # Node: prob, backoff, child_start, child_count
-        NODE_STRUCT = struct.Struct("eeii")
+        NODE_STRUCT = (
+            struct.Struct("<ffii") if not quantized else struct.Struct("<eeii")
+        )
         # Pointer: word_id, node_index
-        POINTER_STRUCT = struct.Struct("ii")
+        POINTER_STRUCT = struct.Struct("<ii")
 
         nodes = []
         pointers = {}
@@ -213,6 +219,7 @@ class KenLMModel:
         pointers_flat = [tup for tup in pointers.values()]
 
         with open(filename, "wb") as f:
+            f.write(HEADER_STRUCT.pack(len(nodes), len(pointers)))
             for n in nodes:
                 f.write(NODE_STRUCT.pack(*n))
             for p in pointers_flat:
