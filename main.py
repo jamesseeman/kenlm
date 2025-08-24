@@ -54,7 +54,7 @@ class KenLMModel:
         self.vocab = {}
         self.model = TrieNode()
 
-    def train(self, filename, length):
+    def train(self, filename, length, count_thresholds=None):
         # Pass 1: count raw words
         raw_counts = Counter()
         with open(filename) as f:
@@ -88,6 +88,25 @@ class KenLMModel:
                         node = node.then(h)
 
                     self.model.then(seq[-1], False).follows(seq[-2])
+
+        # Prune based on count
+        if count_thresholds:
+            nodes = queue.Queue()
+            nodes.put((self.model, 0))
+
+            # Breadth-first traversal
+            while not nodes.empty():
+                node, depth = nodes.get()
+                if node.word:
+                    vocab.update(node.word)
+
+                node.children = {
+                    w: n
+                    for w, n in node.children.items()
+                    if n.count >= count_thresholds[depth]
+                }
+                for n in node.children.values():
+                    nodes.put((n, depth + 1))
 
         # Calculate P_continuation(w) for the unigram
         total_bigrams = sum(len(w.continues) for w in self.model.children.values())
@@ -156,16 +175,13 @@ class KenLMModel:
 
             for seq in sliding_window(words, self.n):
                 prob = math.log(self.score(seq))
-                if prob > 1:
-                    print("unpossible error")
-
                 log_probabilities.append(prob)
 
         return math.exp(-sum(log_probabilities) / len(log_probabilities))
 
     def save(self, filename):
         # Node: prob, backoff, child_start, child_count
-        NODE_STRUCT = struct.Struct("ffii")
+        NODE_STRUCT = struct.Struct("eeii")
         # Pointer: word_id, node_index
         POINTER_STRUCT = struct.Struct("ii")
 
@@ -204,11 +220,11 @@ class KenLMModel:
 
 
 def main():
-    train_len = 20000  # 5000000
-    test_len = 5000  # 100000
+    train_len = 3000000
+    test_len = 100000
 
     model = KenLMModel(n=5, unk_threshold=2)
-    model.train(filename="en.tok", length=train_len)
+    model.train(filename="en.tok", length=train_len, count_thresholds=[1, 2, 5, 10, 20])
 
     val_set = []
     with open("en.tok") as f:
