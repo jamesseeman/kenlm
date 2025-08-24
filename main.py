@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import Self
 import struct
 import queue
+import argparse
+
+# todo: Only has values up to n=5
+COUNT_THRESHOLDS = [1, 2, 5, 10, 20]
 
 
 def sliding_window(sentence, n):
@@ -96,7 +100,7 @@ class KenLMModel:
         self.vocab = VocabTrie()
         self.model = TrieNode()
 
-    def train(self, filename, length, count_thresholds=None):
+    def train(self, filename, length, prune=True):
         # Pass 1: count raw words
         raw_counts = Counter()
         with open(filename) as f:
@@ -138,7 +142,7 @@ class KenLMModel:
                     self.model.then(seq[-1], False).follows(seq[-2])
 
         # Prune based on count
-        if count_thresholds:
+        if prune:
             nodes = queue.Queue()
             nodes.put((self.model, 0))
 
@@ -151,7 +155,7 @@ class KenLMModel:
                 node.children = {
                     w: n
                     for w, n in node.children.items()
-                    if n.count >= count_thresholds[depth]
+                    if n.count >= COUNT_THRESHOLDS[depth]
                 }
                 for n in node.children.values():
                     nodes.put((n, depth + 1))
@@ -325,22 +329,49 @@ class KenLMModel:
 
 
 def main():
-    train_len = 3000000
-    test_len = 100000
+    parser = argparse.ArgumentParser(
+        description="Train, validate, and serialize an n-gram model"
+    )
 
-    model = KenLMModel(n=5, unk_threshold=2)
-    model.train(filename="en.tok", length=train_len, count_thresholds=[1, 2, 5, 10, 20])
+    parser.add_argument("-n", type=int, help="n-gram model depth", default=3)
+    parser.add_argument("input", type=str, help="Input training and validation file")
+    parser.add_argument("train_len", type=int, help="Length of training set")
+    parser.add_argument("--test_len", type=int, default=0, help="Length of testing set")
+    parser.add_argument(
+        "-u",
+        "--unknown_threshold",
+        type=int,
+        default=2,
+        help="Threshold for including words",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        default="model.bin",
+        help="Binary output file",
+    )
+    parser.add_argument(
+        "-p", "--prune", type=bool, default=True, help="Prune the model"
+    )
 
-    val_set = []
-    with open("en.tok") as f:
-        for line in itertools.islice(f, train_len, train_len + test_len):
-            val_set.append(line)
+    args = parser.parse_args()
 
-    score = model.perplexity(val_set)
+    model = KenLMModel(n=5, unk_threshold=args.unknown_threshold)
+    model.train(filename="en.tok", length=args.train_len, prune=args.prune)
     print(f"Vocab: {len(model.vocab)}")
-    print(f"Score: {score}")
 
-    model.save("model.bin")
+    if args.test_len > 0:
+        val_set = []
+        with open("en.tok") as f:
+            for line in itertools.islice(
+                f, args.train_len, args.train_len + args.test_len
+            ):
+                val_set.append(line)
+        score = model.perplexity(val_set)
+        print(f"Score: {score}")
+
+    model.save(args.output)
 
 
 if __name__ == "__main__":

@@ -3,4 +3,5 @@
 *.txt
 *.bin
 *.vocab
+launch.json
 venv
