@@ -13,6 +13,48 @@ def sliding_window(sentence, n):
 
 
 @dataclass
+class VocabTrie:
+    char: str | None = None
+    parent: Self | None = None
+
+    id: int | None = None  # int for words (not necessarily leaf node)
+    children: dict[str, Self] = field(default_factory=dict)
+
+    def __hash__(self):
+        return id(self)
+
+    def __len__(self):
+        is_word = 1 if self.id is not None else 0
+        return is_word + sum([len(c) for c in self.children.values()])
+
+    def __contains__(self, key):
+        return self.get(key) is not None
+
+    def get(self, word: str, default=None):
+        if word is None:
+            return default
+
+        if word == "":
+            return self.id if self.id is not None else default
+
+        c = word[0]
+        key = word[1:]
+
+        child = self.children.get(c)
+        if child is None:
+            return default
+
+        return child.get(key, default)
+
+    def then(self, char: str):
+        if char in self.children:
+            return self.children[char]
+
+        self.children[char] = VocabTrie(char, self)
+        return self.children[char]
+
+
+@dataclass
 class TrieNode:
     word: str | None = None
     parent: Self | None = None
@@ -51,7 +93,7 @@ class KenLMModel:
     def __init__(self, n=3, unk_threshold=1):
         self.n = n
         self.unk_threshold = unk_threshold
-        self.vocab = {}
+        self.vocab = VocabTrie()
         self.model = TrieNode()
 
     def train(self, filename, length, count_thresholds=None):
@@ -66,7 +108,13 @@ class KenLMModel:
         # Build vocabulary and prune rare words
         vocab = {w for w, c in raw_counts.items() if c > self.unk_threshold}
         vocab.update({"<s>", "</s>", "<unk>"})
-        self.vocab = {w: i for i, w in enumerate(vocab)}
+
+        # Build vocab trie
+        for i, w in enumerate(vocab):
+            v = self.vocab
+            for c in w:
+                v = v.then(c)
+            v.id = i
 
         with open(filename) as f:
             for _, line in itertools.islice(enumerate(f), length):
@@ -213,7 +261,9 @@ class KenLMModel:
 
             nodes.append([node.prob, node.backoff_weight, -1, len(node.children)])
 
-            for id, c in sorted(node.children.items(), key=lambda c: self.vocab[c[0]]):
+            for _, c in sorted(
+                node.children.items(), key=lambda c: self.vocab.get(c[0])
+            ):
                 node_queue.put(c)
 
         pointers_flat = [tup for tup in pointers.values()]
@@ -224,6 +274,54 @@ class KenLMModel:
                 f.write(NODE_STRUCT.pack(*n))
             for p in pointers_flat:
                 f.write(POINTER_STRUCT.pack(*p))
+
+        # Do the same for the vocab trie
+
+        # Header: node count, character count
+        HEADER_STRUCT = struct.Struct("<ii")
+        # Node: char_index (ptr to char pool), child start, child count, word_id (-1 if not a word)
+        NODE_STRUCT = struct.Struct("<iiii")
+
+        chars = set({})
+        nodes = []
+        pointers = {}
+
+        node_queue = queue.Queue()
+        node_queue.put(self.vocab)
+        while not node_queue.empty():
+            node = node_queue.get()
+            if node.char is not None:
+                chars.add(node.char)
+            pointers[node] = len(nodes)
+
+            nodes.append(
+                [
+                    node.char,
+                    -1,
+                    len(node.children),
+                    node.id if node.id is not None else -1,
+                ]
+            )
+
+            if node.parent is not None:
+                parent_pointer = pointers[node.parent]
+                if nodes[parent_pointer][1] == -1:
+                    nodes[parent_pointer][1] = len(nodes)
+
+            for c in node.children.values():
+                node_queue.put(c)
+
+        chars = {c: i for i, c in enumerate(sorted(chars))}
+        for n in nodes:
+            n[0] = chars[n[0]] if n[0] is not None else 0
+
+        with open(f"{filename}.vocab", "wb") as f:
+            f.write(HEADER_STRUCT.pack(len(nodes), len(chars)))
+            for n in nodes:
+                f.write(NODE_STRUCT.pack(*n))
+            for c in chars.keys():
+                # Null-terminating characters
+                f.write(c.encode("utf-8") + b"\0")
 
 
 def main():
