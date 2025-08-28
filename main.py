@@ -298,6 +298,11 @@ class KenLMModel:
                 chars.add(node.char)
             pointers[node] = len(nodes)
 
+            if node.parent is not None:
+                parent_pointer = pointers[node.parent]
+                if nodes[parent_pointer][1] == -1:
+                    nodes[parent_pointer][1] = len(nodes)
+
             nodes.append(
                 [
                     node.char,
@@ -306,11 +311,6 @@ class KenLMModel:
                     node.id if node.id is not None else -1,
                 ]
             )
-
-            if node.parent is not None:
-                parent_pointer = pointers[node.parent]
-                if nodes[parent_pointer][1] == -1:
-                    nodes[parent_pointer][1] = len(nodes)
 
             for c in node.children.values():
                 node_queue.put(c)
