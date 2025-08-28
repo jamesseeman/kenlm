@@ -114,7 +114,7 @@ class KenLMModel:
         vocab.update({"<s>", "</s>", "<unk>"})
 
         # Build vocab trie
-        for i, w in enumerate(vocab):
+        for i, w in enumerate(sorted(vocab)):
             v = self.vocab
             for c in w:
                 v = v.then(c)
